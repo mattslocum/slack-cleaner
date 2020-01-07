@@ -1,12 +1,26 @@
+const program = require('commander');
+import { generateWebClient } from './src/web';
 import { User } from './src/User';
 import { Conversations } from './src/Conversations';
-import minimist = require('minimist');
+
+program
+    .description(`This is a tool to clean up slack channels.`)
+    // required
+    .option('--channel [channel]', `Private slack channel to delete from.`) // TODO: support either private or public.
+    .option('--slack_token [token]', `Slack auth token`)
+    // optional
+    .option('--apply', `Apply the changes.`)
+    .option('--keep_days [days]', `Number of fresh days to keep.`, '7')
+    .parse(process.argv);
+
+if (!program.channel || !program.slack_token) {
+    program.help();
+}
+
+generateWebClient(program.slack_token);
+
 
 (async () => {
-    let argv = minimist(process.argv.slice(2));
-    if (!argv.channel) {
-        throw "--channel param required";
-    }
 
     const user = new User();
 
@@ -16,17 +30,26 @@ import minimist = require('minimist');
 
     const conversations = new Conversations();
 
-    const channelId = await conversations.getPrivateChannelId(argv.channel);
+    const channelId = await conversations.getPrivateChannelId(program.channel);
 
-    const messages = await conversations.getMessages(channelId, 7);
+    const messages = await conversations.getMessages(channelId, program.keep_days);
     messages.reverse(); // make oldest first
 
     messages.forEach(async message => {
         if (message.replies) {
-            message.replies.forEach(async reply => await conversations.deleteMessage(channelId, reply.ts));
+            if (program.apply) {
+                message.replies.forEach(async reply => await conversations.deleteMessage(channelId, reply.ts));
+            } else {
+                message.replies.forEach(reply => console.log(`[dry mode] delete reply: ${message.text}`));
+            }
         }
         try {
-            await conversations.deleteMessage(channelId, message.ts);
+            if (program.apply) {
+                await conversations.deleteMessage(channelId, message.ts);
+                console.log(`deleted: ${message.text}`);
+            } else {
+                console.log(`[dry mode] delete message: ${message.text}`);
+            }
         } catch (e) {
             if (e.data.error == "message_not_found") {
                 // do nothing. It is already deleted.
@@ -34,7 +57,9 @@ import minimist = require('minimist');
                 throw e;
             }
         }
-
-        console.log(`deleted: ${message.text}`);
     });
+
+    if (!program.apply) {
+        console.log(`Ran in [dry mode]. use '--apply' to apply changes.`);
+    }
 })();
